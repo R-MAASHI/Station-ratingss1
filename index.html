@@ -1,0 +1,196 @@
+# Station-ratingss1
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>خريطة المحطات الحديثة</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+body { margin:0; padding:0; font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+#map { height:100vh; width:100%; }
+.sidebar {
+  position: fixed;
+  top:0; left:-300px;
+  width:300px;
+  height:100%;
+  background:#fff;
+  box-shadow:2px 0 10px rgba(0,0,0,0.2);
+  padding:15px;
+  transition: 0.3s;
+  overflow-y:auto;
+  z-index:1000;
+}
+.sidebar.show { left:0; }
+.toggle-btn {
+  position: fixed;
+  top:15px; left:15px;
+  background:#4caf50;
+  color:#fff;
+  padding:10px 12px;
+  border:none;
+  border-radius:5px;
+  cursor:pointer;
+  z-index:1100;
+}
+.toggle-btn:hover { background:#388e3c; }
+input, button { padding:5px; margin:3px 0; border-radius:5px; border:1px solid #ccc; width:100%; }
+button { border:none; background:#3f51b5; color:#fff; cursor:pointer; }
+button:hover { background:#303f9f; }
+.station-item { padding:5px; border-bottom:1px solid #ddd; cursor:pointer; }
+.station-item:hover { background:#f0f0f0; }
+h4 { margin:10px 0 5px 0; }
+ul { padding-left:20px; }
+</style>
+</head>
+<body>
+
+<button class="toggle-btn" onclick="toggleSidebar()">☰</button>
+
+<div class="sidebar" id="sidebar">
+  <h4>بحث عن محطة</h4>
+  <input type="text" id="searchInput" placeholder="بحث بالاسم أو الرمز">
+  <button onclick="searchStation()">بحث</button>
+  <hr>
+  <h4>إضافة محطة جديدة</h4>
+  <input type="text" id="newStationName" placeholder="اسم المحطة">
+  <input type="text" id="newStationID" placeholder="الرمز المميز">
+  <input type="number" id="newLat" placeholder="خط العرض" step="0.0001">
+  <input type="number" id="newLng" placeholder="خط الطول" step="0.0001">
+  <button onclick="addStation()">إضافة محطة</button>
+  <hr>
+  <h4>قائمة المحطات</h4>
+  <div id="stationList"></div>
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+<script>
+// ================= Firebase Config =================
+const firebaseConfig = {
+  apiKey: "AIzaSyBK8iWBvPBvhFIvv6KE2RxAHePri02YM3A",
+  authDomain: "stationsmap-33364.firebaseapp.com",
+  projectId: "stationsmap-33364",
+  storageBucket: "stationsmap-33364.firebasestorage.app",
+  messagingSenderId: "346092804637",
+  appId: "1:346092804637:web:ce4ba174699ba7958a04f4",
+  measurementId: "G-7XVSPBEXXG"
+};
+firebase.initializeApp(firebaseConfig);
+var db = firebase.database();
+
+// ================= الخريطة =================
+var map = L.map('map').setView([24.7136,46.6753],10);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19 }).addTo(map);
+
+// محاولة الحصول على الموقع الحالي
+if (navigator.geolocation) {
+  navigator.geolocation.getCurrentPosition(function(pos){
+    map.setView([pos.coords.latitude,pos.coords.longitude],12);
+  });
+}
+
+var stations = [];
+
+// استرجاع المحطات من Firebase
+db.ref('stations').on('value', function(snapshot){
+  stations = [];
+  map.eachLayer(function(layer){
+    if(layer instanceof L.Marker) map.removeLayer(layer);
+  });
+  snapshot.forEach(function(child){
+    var s = child.val();
+    s.key = child.key;
+    stations.push(s);
+    createMarker(s);
+  });
+  updateStationList();
+});
+
+// إنشاء العلامة لكل محطة
+function createMarker(station){
+  var marker = L.marker([station.lat,station.lng]).addTo(map);
+  marker.bindPopup(getPopupContent(station));
+  station.marker = marker;
+}
+
+// محتوى نافذة المحطة
+function getPopupContent(station){
+  var notesList = station.notes && station.notes.length ? station.notes.map(n=>"<li>"+n+"</li>").join("") : "<li>لا توجد ملاحظات بعد</li>";
+  var html = `<strong>${station.name} (${station.id})</strong>
+    <ul id="notes-${station.id}">${notesList}</ul>
+    <input type="text" id="input-${station.id}" placeholder="أضف ملاحظة جديدة">
+    <button onclick="addNote('${station.key}')">إضافة ملاحظة</button>`;
+  return html;
+}
+
+// إضافة ملاحظة
+function addNote(key){
+  var stationRef = db.ref('stations/' + key);
+  stationRef.once('value').then(function(snapshot){
+    var station = snapshot.val();
+    var input = document.getElementById('input-'+station.id);
+    var value = input.value.trim();
+    if(value){
+      if(!station.notes) station.notes=[];
+      station.notes.push(value);
+      stationRef.update({notes:station.notes});
+      input.value='';
+      // تحديث popup على الخريطة
+      station.marker.setPopupContent(getPopupContent({...station,key:key})).openPopup();
+    }
+  });
+}
+
+// إضافة محطة جديدة
+function addStation(){
+  var name=document.getElementById('newStationName').value.trim();
+  var id=document.getElementById('newStationID').value.trim();
+  var lat=parseFloat(document.getElementById('newLat').value);
+  var lng=parseFloat(document.getElementById('newLng').value);
+  if(name && id && !isNaN(lat) && !isNaN(lng)){
+    db.ref('stations').push({name:name,id:id,lat:lat,lng:lng,notes:[]});
+    document.getElementById('newStationName').value='';
+    document.getElementById('newStationID').value='';
+    document.getElementById('newLat').value='';
+    document.getElementById('newLng').value='';
+  } else { alert("رجاءً أدخلي اسم، رمز وإحداثيات صحيحة."); }
+}
+
+// قائمة المحطات في الشريط الجانبي
+function updateStationList(){
+  var container=document.getElementById('stationList');
+  container.innerHTML='';
+  stations.forEach((s)=>{
+    var div=document.createElement('div');
+    div.className='station-item';
+    div.textContent=s.name + ' (' + s.id + ')';
+    div.onclick=function(){
+      map.setView([s.lat,s.lng],15);
+      s.marker.openPopup();
+    };
+    container.appendChild(div);
+  });
+}
+
+// البحث عن محطة
+function searchStation(){
+  var query=document.getElementById('searchInput').value.trim().toLowerCase();
+  if(!query) return;
+  var found = stations.find(s => s.name.toLowerCase()===query || s.id.toLowerCase()===query);
+  if(found){ map.setView([found.lat,found.lng],15); found.marker.openPopup(); }
+  else alert("لم يتم العثور على المحطة.");
+}
+
+// فتح/غلق الشريط الجانبي
+function toggleSidebar(){
+  document.getElementById('sidebar').classList.toggle('show');
+}
+</script>
+
+</body>
+</html>
